@@ -36,6 +36,20 @@ class SparseGaussianProcess(hk.Module):
             x: the input matrix.
         """
 
+    def randomize(
+        self
+    ):
+        """Samples a new set of random functions from the GP.
+
+        """
+
+    def resample_prior_basis(
+        self
+    ):
+        """Resamples the frequency and phase of the prior random feature basis.
+
+        """
+
     def eval_prior(
         self,
         x: jnp.ndarray,
@@ -46,11 +60,9 @@ class SparseGaussianProcess(hk.Module):
             x: the input matrix.
         """
 
-    def randomize(
+    def prior_KL(
         self
-    ):
-        """Samples a new set of random functions from the GP.
+    ) -> jnp.ndarray:
+        """Evaluates the prior KL term in the sparse VI objective.
 
         """
-
-    
