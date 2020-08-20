@@ -1,4 +1,3 @@
-
 from multipledispatch import dispatch
 import jax.random as jr
 import tensorflow_probability
@@ -6,7 +5,7 @@ tfp = tensorflow_probability.experimental.substrates.jax
 tfk = tfp.math.psd_kernels
 
 
-@dispatch(tfk.ExponentiatedQuadratic)
+@dispatch(tfk.ExponentiatedQuadratic, int, int, object)
 def spectral_measure(k, input_dimension, num_samples, key):
     """Draws samples from the kernel's spectral measure.
 
