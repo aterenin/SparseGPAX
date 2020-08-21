@@ -101,7 +101,7 @@ class SparseGaussianProcess():
             num_basis: the number of basis functions to use.
             key: the random number generator key.
         """
-        self.prior_frequency = spectral_measure(self.kernel, self.input_dimension, num_basis, key)
+        self.prior_frequency = standard_spectral_measure(self.kernel, self.input_dimension, num_basis, key)
         self.prior_phase = jr.uniform(key, (num_basis, self.output_dimension), maxval=2*jnp.pi)
         self.randomize(self.prior_weights.shape[-1],key)
 
@@ -120,9 +120,11 @@ class SparseGaussianProcess():
         (S,L2) = self.prior_weights.shape
         assert L==L2
         assert ID==ID2
-        basis_fn_inner_prod = jnp.reshape(jnp.reshape(self.prior_frequency, (L*OD,ID)) @ x.T, (L,OD,N))
+        (outer_weights, inner_weights) = spectral_weights(self.kernel, ID, self.prior_frequency)
+        rescaled_x = x / jnp.reshape(inner_weights,(1,ID))
+        basis_fn_inner_prod = jnp.reshape(jnp.reshape(self.prior_frequency, (L*OD,ID)) @ rescaled_x.T, (L,OD,N))
         basis_fn = jnp.cos(basis_fn_inner_prod + jnp.reshape(self.prior_phase, (L,OD,1)))
-        basis_weight = jnp.sqrt(2/L) * self.prior_weights # TODO: typecast this to f32!
+        basis_weight = outer_weights * jnp.sqrt(2/L) * self.prior_weights # TODO: typecast this to f32!
         output = jnp.reshape(basis_weight @ jnp.reshape(jnp.transpose(basis_fn, (1,0,2)), (L,N*OD)), (S,N,OD))
         return output
 

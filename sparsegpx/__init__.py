@@ -3,7 +3,8 @@
 
 __all__ = (
     'SparseGaussianProcess',
-    'spectral_measure',
+    'standard_spectral_measure',
+    'spectral_weights',
 )
 
 from sparsegpx.gp import *
