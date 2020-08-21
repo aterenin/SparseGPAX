@@ -8,6 +8,8 @@ tfp = tensorflow_probability.experimental.substrates.jax
 tfk = tfp.math.psd_kernels
 from sparsegpx.spectral import spectral_measure
 
+NUM_HUTCHINSON_VECTORS = 32
+
 class SparseGaussianProcess(): 
     """A sparse Gaussian process, implemented as a Haiku module
 
@@ -38,7 +40,7 @@ class SparseGaussianProcess():
         self.inducing_pseudo_mean = jnp.zeros((num_inducing*self.output_dimension))
         self.inducing_pseudo_log_errvar = jnp.ones((num_inducing*self.output_dimension))
         self.inducing_weights = jnp.zeros((num_inducing,))
-        self.cholesky_cache = jsp.linalg.cholesky(kernel.matrix(self.inducing_locations, self.inducing_locations) + jnp.diag(jnp.exp(self.inducing_pseudo_log_errvar)), lower=True)
+        self.cholesky = jsp.linalg.cholesky(kernel.matrix(self.inducing_locations, self.inducing_locations) + jnp.diag(jnp.exp(self.inducing_pseudo_log_errvar)))
         self.log_error = jnp.zeros((1,))
         self.resample_prior_basis(num_basis,key)
         self.randomize(num_samples,key)
@@ -53,7 +55,17 @@ class SparseGaussianProcess():
         Args:
             x: the input matrix.
         """
-        return x
+        # evaluate the prior part at x
+        f_prior = self.prior(x)
+
+        # evaluate the data part at x
+        (_,OD,_) = self.prior_frequency.shape
+        (N,_) = x.shape
+        (S,_) = self.prior_weights.shape
+        f_data = jnp.reshape(self.kernel.matrix(x, self.inducing_locations) @ self.inducing_weights, (S,N,OD)) # non-batched
+
+        # # combine
+        f_prior + f_data
 
 
     def randomize(
@@ -64,10 +76,18 @@ class SparseGaussianProcess():
         """Samples a new set of random functions from the GP.
 
         Args:
-            num_basis: the number of samples to draw.
+            num_samples: the number of samples to draw.
             key: the random number generator key.
         """
+        # sample the prior weights w_i ~ N(0,1) IID
         self.prior_weights = jr.normal(key, (num_samples,self.prior_weights.shape[-1]))
+
+        # compute the mean-reparameterized inducing weights v = \mu + (K + V)^{-1}(f - \eps)
+        M = self.inducing_locations.shape[0]
+        S = self.inducing_weights.shape
+        self.cholesky = jsp.linalg.cholesky(self.kernel.matrix(self.inducing_locations, self.inducing_locations) + jnp.diag(jnp.exp(self.inducing_pseudo_log_errvar)))
+        residual = self.prior(self.inducing_locations) - (jnp.reshape(jnp.exp(self.inducing_pseudo_log_errvar / 2), (S,M)) * jr.normal(key,(S,M))) # TODO: careful with f32!
+        self.inducing_weights = self.inducing_pseudo_mean + jsp.linalg.solve_triangular(self.cholesky,jsp.linalg.solve_triangular(self.cholesky, residual, trans=1))
 
 
     def resample_prior_basis(
@@ -100,17 +120,26 @@ class SparseGaussianProcess():
         (S,L2) = self.prior_weights.shape
         assert L==L2
         assert ID==ID2
-        basis_fn_inner_prod = jnp.reshape(jnp.matmul(jnp.reshape(self.prior_frequency, (L*OD,ID)), x.T), (L,OD,N))
+        basis_fn_inner_prod = jnp.reshape(jnp.reshape(self.prior_frequency, (L*OD,ID)) @ x.T, (L,OD,N))
         basis_fn = jnp.cos(basis_fn_inner_prod + jnp.reshape(self.prior_phase, (L,OD,1)))
         basis_weight = jnp.sqrt(2/L) * self.prior_weights # TODO: typecast this to f32!
-        output = jnp.reshape(jnp.matmul(basis_weight, jnp.reshape(jnp.transpose(basis_fn, (1,0,2)), (L,N*OD))), (S,N,OD))
+        output = jnp.reshape(basis_weight @ jnp.reshape(jnp.transpose(basis_fn, (1,0,2)), (L,N*OD)), (S,N,OD))
         return output
 
 
     def prior_KL(
-            self
+            self,
+            key: jr.PRNGKey,
     ) -> jnp.ndarray:
-        """Evaluates the prior KL term in the sparse VI objective.
+        """Evaluates the prior KL term in the sparse VI objective. 
+        Uses the Hutchinson trace estimator to avoid numeric triangular inversion.
 
+        Args:
+            key: the random number generator key.
         """
-        return jnp.zeros(1)
+        logdet_term = (2 * jnp.sum(jnp.diag(self.cholesky))) - jnp.sum(self.inducing_pseudo_log_errvar)
+        kernel_matrix = self.kernel.matrix(self.inducing_locations, self.inducing_locations)
+        hutchinson_vectors = jr.normal(key, (NUM_HUTCHINSON_VECTORS,kernel_matrix.shape[0]))
+        trace_term = jnp.sum(hutchinson_vectors @ kernel_matrix @ jsp.linalg.solve_triangular(self.cholesky,jsp.linalg.solve_triangular(self.cholesky, hutchinson_vectors.T, trans=1)))
+        reparameterized_quadratic_form_term = self.inducing_pseudo_mean.T @ kernel_matrix @ self.inducing_pseudo_mean
+        return (logdet_term - self.inducing_pseudo_mean.len() + trace_term + reparameterized_quadratic_form_term) / 2
