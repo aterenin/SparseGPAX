@@ -7,4 +7,4 @@ __all__ = (
     'spectral_weights',
 )
 
-from sparsegpx.gp import *
+from sparsegpax.gp import *

@@ -6,7 +6,7 @@ import jax.scipy as jsp
 import tensorflow_probability
 tfp = tensorflow_probability.experimental.substrates.jax
 tfk = tfp.math.psd_kernels
-from sparsegpx.spectral import spectral_measure
+from sparsegpax.spectral import spectral_measure
 
 NUM_HUTCHINSON_VECTORS = 32
 
