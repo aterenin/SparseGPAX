@@ -20,7 +20,7 @@ def standard_spectral_measure(kernel, input_dimension, num_samples, key) -> jnp.
     return jr.normal(key, (num_samples,1,input_dimension))
 
 
-@dispatch(tfk.ExponentiatedQuadratic)
+@dispatch(tfk.ExponentiatedQuadratic, int, object)
 def spectral_weights(kernel, input_dimension, frequency) -> Tuple[jnp.ndarray,jnp.ndarray]:
     """Computes the input weights and output weights associated with the kernel.
 
@@ -45,7 +45,7 @@ def standard_spectral_measure(kernel, input_dimension, num_samples, key) -> jnp.
     return standard_spectral_measure(kernel.kernel, input_dimension, num_samples, key)
 
 
-@dispatch(tfk.FeatureScaled, object)
+@dispatch(tfk.FeatureScaled, int, object)
 def spectral_weights(kernel, input_dimension, frequency) -> Tuple[jnp.ndarray,jnp.ndarray]:
     """Computes the input weights and output weights associated with the kernel.
 
