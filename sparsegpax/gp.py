@@ -6,7 +6,7 @@ import jax.scipy as jsp
 import tensorflow_probability
 tfp = tensorflow_probability.experimental.substrates.jax
 tfk = tfp.math.psd_kernels
-from sparsegpax.spectral import spectral_measure
+from sparsegpax.spectral import *
 
 NUM_HUTCHINSON_VECTORS = 32
 
@@ -39,7 +39,7 @@ class SparseGaussianProcess():
         self.inducing_locations = jr.normal(key, (num_inducing, self.input_dimension))
         self.inducing_pseudo_mean = jnp.zeros((num_inducing*self.output_dimension))
         self.inducing_pseudo_log_errvar = jnp.ones((num_inducing*self.output_dimension))
-        self.inducing_weights = jnp.zeros((num_inducing,))
+        self.inducing_weights = jnp.zeros((num_samples,num_inducing))
         self.cholesky = jsp.linalg.cholesky(kernel.matrix(self.inducing_locations, self.inducing_locations) + jnp.diag(jnp.exp(self.inducing_pseudo_log_errvar)))
         self.log_error = jnp.zeros((1,))
         self.resample_prior_basis(num_basis,key)
@@ -62,9 +62,9 @@ class SparseGaussianProcess():
         (_,OD,_) = self.prior_frequency.shape
         (N,_) = x.shape
         (S,_) = self.prior_weights.shape
-        f_data = jnp.reshape(self.kernel.matrix(x, self.inducing_locations) @ self.inducing_weights, (S,N,OD)) # non-batched
+        f_data = jnp.reshape(self.inducing_weights @ self.kernel.matrix(self.inducing_locations, x), (S,N,OD)) # non-batched
 
-        # # combine
+        # combine
         f_prior + f_data
 
 
@@ -80,14 +80,14 @@ class SparseGaussianProcess():
             key: the random number generator key.
         """
         # sample the prior weights w_i ~ N(0,1) IID
-        self.prior_weights = jr.normal(key, (num_samples,self.prior_weights.shape[-1]))
-
+        self.prior_weights = jr.normal(key, (num_samples,self.prior_weights.shape[1]))
+        
         # compute the mean-reparameterized inducing weights v = \mu + (K + V)^{-1}(f - \eps)
-        M = self.inducing_locations.shape[0]
-        S = self.inducing_weights.shape
+        (M,ID) = self.inducing_locations.shape
+        (S,_) = self.inducing_weights.shape
         self.cholesky = jsp.linalg.cholesky(self.kernel.matrix(self.inducing_locations, self.inducing_locations) + jnp.diag(jnp.exp(self.inducing_pseudo_log_errvar)))
-        residual = self.prior(self.inducing_locations) - (jnp.reshape(jnp.exp(self.inducing_pseudo_log_errvar / 2), (S,M)) * jr.normal(key,(S,M))) # TODO: careful with f32!
-        self.inducing_weights = self.inducing_pseudo_mean + jsp.linalg.solve_triangular(self.cholesky,jsp.linalg.solve_triangular(self.cholesky, residual, trans=1))
+        residual = jnp.reshape(self.prior(self.inducing_locations), (S,M*ID)) - (jnp.reshape(jnp.exp(self.inducing_pseudo_log_errvar / 2), (1,M*ID)) * jr.normal(key,(S,M*ID))) # TODO: careful with f32!
+        self.inducing_weights = self.inducing_pseudo_mean + jsp.linalg.solve_triangular(self.cholesky,jsp.linalg.solve_triangular(self.cholesky, residual.T, trans=1)).T
 
 
     def resample_prior_basis(
@@ -103,7 +103,7 @@ class SparseGaussianProcess():
         """
         self.prior_frequency = standard_spectral_measure(self.kernel, self.input_dimension, num_basis, key)
         self.prior_phase = jr.uniform(key, (num_basis, self.output_dimension), maxval=2*jnp.pi)
-        self.randomize(self.prior_weights.shape[-1],key)
+        self.randomize(self.prior_weights.shape[0],key)
 
 
     def prior(
@@ -144,4 +144,4 @@ class SparseGaussianProcess():
         hutchinson_vectors = jr.normal(key, (NUM_HUTCHINSON_VECTORS,kernel_matrix.shape[0]))
         trace_term = jnp.sum(hutchinson_vectors @ kernel_matrix @ jsp.linalg.solve_triangular(self.cholesky,jsp.linalg.solve_triangular(self.cholesky, hutchinson_vectors.T, trans=1)))
         reparameterized_quadratic_form_term = self.inducing_pseudo_mean.T @ kernel_matrix @ self.inducing_pseudo_mean
-        return (logdet_term - self.inducing_pseudo_mean.len() + trace_term + reparameterized_quadratic_form_term) / 2
+        return (logdet_term - self.inducing_pseudo_mean.shape[0] + trace_term + reparameterized_quadratic_form_term) / 2

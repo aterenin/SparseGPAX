@@ -29,7 +29,8 @@ def spectral_weights(kernel, input_dimension, frequency) -> Tuple[jnp.ndarray,jn
         input_dimension: the kernel's input space dimension.
         frequency: the sampled frequencies.
     """
-    return (kernel.amplitude, jnp.ones((input_dimension)))
+    amplitude = kernel.amplitude if kernel.amplitude is not None else jnp.ones((input_dimension,))
+    return (amplitude, jnp.ones((input_dimension,)))
 
 
 @dispatch(tfk.FeatureScaled, int, int, object)
