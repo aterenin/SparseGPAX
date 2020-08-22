@@ -59,13 +59,15 @@ class SparseGaussianProcess():
         f_prior = self.prior(x)
 
         # evaluate the data part at x
-        (_,OD,_) = self.prior_frequency.shape
-        (N,_) = x.shape
-        (S,_) = self.prior_weights.shape
+        (L,OD,ID) = self.prior_frequency.shape
+        (N,ID2) = x.shape
+        (S,L2) = self.prior_weights.shape
+        assert L==L2
+        assert ID==ID2
         f_data = jnp.reshape(self.inducing_weights @ self.kernel.matrix(self.inducing_locations, x), (S,N,OD)) # non-batched
 
         # combine
-        f_prior + f_data
+        return f_prior + f_data
 
 
     def randomize(
@@ -84,7 +86,8 @@ class SparseGaussianProcess():
         
         # compute the mean-reparameterized inducing weights v = \mu + (K + V)^{-1}(f - \eps)
         (M,ID) = self.inducing_locations.shape
-        (S,_) = self.inducing_weights.shape
+        (S,M2) = self.inducing_weights.shape
+        assert M==M2
         self.cholesky = jsp.linalg.cholesky(self.kernel.matrix(self.inducing_locations, self.inducing_locations) + jnp.diag(jnp.exp(self.inducing_pseudo_log_errvar)))
         residual = jnp.reshape(self.prior(self.inducing_locations), (S,M*ID)) - (jnp.reshape(jnp.exp(self.inducing_pseudo_log_errvar / 2), (1,M*ID)) * jr.normal(key,(S,M*ID))) # TODO: careful with f32!
         self.inducing_weights = self.inducing_pseudo_mean + jsp.linalg.solve_triangular(self.cholesky,jsp.linalg.solve_triangular(self.cholesky, residual.T, trans=1)).T
