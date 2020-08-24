@@ -2,6 +2,7 @@ from typing import Tuple
 from multipledispatch import dispatch
 import jax.numpy as jnp
 import jax.random as jr
+from jax import jit
 import tensorflow_probability
 tfp = tensorflow_probability.experimental.substrates.jax
 tfk = tfp.math.psd_kernels
@@ -32,6 +33,7 @@ def spectral_weights(kernel, frequency) -> Tuple[jnp.ndarray,jnp.ndarray]:
     (output_dimension, input_dimension, num_samples) = frequency.shape
     amplitude = kernel.amplitude if kernel.amplitude is not None else jnp.ones((output_dimension,num_samples))
     return (amplitude, jnp.ones((input_dimension,)))
+
 
 
 @dispatch(tfk.FeatureScaled, int, int, int, object)

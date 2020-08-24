@@ -13,6 +13,8 @@ class SparseGaussianProcess():
     """A sparse Gaussian process, implemented as a Haiku module.
 
     """
+
+
     def __init__(
             self,
             input_dimension: int,
@@ -31,17 +33,16 @@ class SparseGaussianProcess():
         num_samples = 8
         num_inducing = 16
         self.kernel = kernel
-        self.prior_frequency = jnp.zeros((output_dimension, input_dimension, num_basis)) # TODO: reorder
-        self.prior_phase = jnp.zeros((output_dimension, num_basis)) # TODO: reorder
+        self.prior_frequency = jnp.zeros((output_dimension, input_dimension, num_basis))
+        self.prior_phase = jnp.zeros((output_dimension, num_basis))
         self.prior_weights = jnp.zeros((output_dimension, num_basis, num_samples))
         self.inducing_locations = jr.normal(key, (num_inducing, input_dimension))
         self.inducing_pseudo_mean = jnp.zeros((output_dimension, num_inducing))
         self.inducing_pseudo_log_errvar = jnp.ones((output_dimension, num_inducing))
         self.inducing_weights = jnp.zeros((output_dimension,num_inducing,num_samples))
-        self.cholesky = jsp.linalg.cholesky(kernel.matrix(self.inducing_locations, self.inducing_locations) + vmap(jnp.diag)(jnp.exp(self.inducing_pseudo_log_errvar)))
+        self.cholesky = jnp.zeros((output_dimension,num_inducing,num_inducing))
         self.log_error = jnp.zeros((output_dimension,))
         self.resample_prior_basis(num_basis,key)
-        self.randomize(num_samples,key)
 
 
     def __call__(
@@ -90,13 +91,14 @@ class SparseGaussianProcess():
         assert M==M2
         assert OD==OD2
         assert S==S2
-        self.cholesky = jsp.linalg.cholesky(self.kernel.matrix(self.inducing_locations, self.inducing_locations) + vmap(jnp.diag)(jnp.exp(self.inducing_pseudo_log_errvar)))
+        (self.cholesky,lower) = jsp.linalg.cho_factor(self.kernel.matrix(self.inducing_locations, self.inducing_locations) + vmap(jnp.diag)(jnp.exp(self.inducing_pseudo_log_errvar)))
         assert self.cholesky.shape==(OD,M,M)
+        assert lower==False
         prior = self.prior(self.inducing_locations)
         assert prior.shape==(S,M,OD)
         residual = prior.T - (jnp.reshape(jnp.exp(self.inducing_pseudo_log_errvar / 2), (OD,M,1)) * jr.normal(key,(OD,M,num_samples))) # TODO: careful with f32!
         assert residual.shape==(OD,M,num_samples)
-        self.inducing_weights = jnp.reshape(self.inducing_pseudo_mean,(OD,M,1)) + jsp.linalg.solve_triangular(self.cholesky,jsp.linalg.solve_triangular(self.cholesky, residual, trans=1))
+        self.inducing_weights = jnp.reshape(self.inducing_pseudo_mean,(OD,M,1)) + jsp.linalg.cho_solve((self.cholesky,False),residual)
         assert self.inducing_weights.shape==(OD,M,num_samples)
 
 
@@ -112,12 +114,17 @@ class SparseGaussianProcess():
             key: the random number generator key.
         """
         (OD,ID,L) = self.prior_frequency.shape
-        self.prior_frequency = standard_spectral_measure(self.kernel, self.prior_frequency.shape[0], self.prior_frequency.shape[1], num_basis, key)
+        self.prior_frequency = standard_spectral_measure(self.kernel, OD, ID, num_basis, key)
         assert self.prior_frequency.shape == (OD,ID,num_basis)
-        (OD,L) = self.prior_phase.shape
-        self.prior_phase = jr.uniform(key, (self.prior_phase.shape[0], num_basis), maxval=2*jnp.pi)
+        (OD2,L2) = self.prior_phase.shape
+        assert OD2==OD
+        assert L2==L
+        self.prior_phase = jr.uniform(key, (OD, num_basis), maxval=2*jnp.pi)
         assert self.prior_phase.shape == (OD,num_basis)
-        self.randomize(self.prior_weights.shape[2],key)
+        (OD3,L3,S) = self.prior_weights.shape
+        assert OD3==OD
+        assert L3==L2
+        self.randomize(S,key)
 
 
     def prior(
@@ -165,7 +172,7 @@ class SparseGaussianProcess():
         """
         logdet_term = (2 * jnp.sum(vmap(jnp.diag)(self.cholesky))) - jnp.sum(self.inducing_pseudo_log_errvar)
         kernel_matrix = self.kernel.matrix(self.inducing_locations, self.inducing_locations)
-        cholesky_inv = vmap(lambda x: jsp.linalg.solve_triangular(x, jnp.eye(self.cholesky.shape[-1])))(self.cholesky)
-        trace_term = jnp.sum(vmap(lambda x: x @ x.T)(cholesky_inv) * kernel_matrix)
+        cholesky_inv = vmap(lambda x: jsp.linalg.cho_solve((x,False), jnp.eye(*x.shape)))(self.cholesky)
+        trace_term = jnp.sum(cholesky_inv * kernel_matrix)
         reparameterized_quadratic_form_term = jnp.sum(self.inducing_pseudo_mean @ kernel_matrix @ self.inducing_pseudo_mean.T)
         return (logdet_term - self.inducing_pseudo_mean.shape[0] + trace_term + reparameterized_quadratic_form_term) / 2
