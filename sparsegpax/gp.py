@@ -9,40 +9,36 @@ tfp = tensorflow_probability.experimental.substrates.jax
 tfk = tfp.math.psd_kernels
 from sparsegpax.spectral import standard_spectral_measure, spectral_weights
 
-class SparseGaussianProcess(): 
+class SparseGaussianProcess: 
     """A sparse Gaussian process, implemented as a Haiku module.
-
     """
-
-
     def __init__(
             self,
             input_dimension: int,
             output_dimension: int,
             kernel: tfk.PositiveSemidefiniteKernel,
             key: jr.PRNGKey,
-            name: Optional[str] = None,
+            num_basis: int = 64,
+            num_samples: int = 8,
+            num_inducing: int = 16,
     ):
         """Initializes the sparse GP.
 
         Args:
             name: module name.
         """
-        # super().__init__(name=name)
-        num_basis = 64
-        num_samples = 8
-        num_inducing = 16
+        key_inducing_loc, key_prior = jr.split(key)
         self.kernel = kernel
         self.prior_frequency = jnp.zeros((output_dimension, input_dimension, num_basis))
         self.prior_phase = jnp.zeros((output_dimension, num_basis))
         self.prior_weights = jnp.zeros((output_dimension, num_basis, num_samples))
-        self.inducing_locations = jr.normal(key, (num_inducing, input_dimension))
+        self.inducing_locations = jr.normal(key_inducing_loc, (num_inducing, input_dimension))
         self.inducing_pseudo_mean = jnp.zeros((output_dimension, num_inducing))
         self.inducing_pseudo_log_errvar = jnp.ones((output_dimension, num_inducing))
         self.inducing_weights = jnp.zeros((output_dimension,num_inducing,num_samples))
         self.cholesky = jnp.zeros((output_dimension,num_inducing,num_inducing))
         self.log_error = jnp.zeros((output_dimension,))
-        self.resample_prior_basis(num_basis,key)
+        self.resample_prior_basis(num_basis, key_prior)
 
 
     def __call__(
@@ -82,7 +78,8 @@ class SparseGaussianProcess():
         """
         # sample the prior weights w_i ~ N(0,1) IID
         (OD,L,S) = self.prior_weights.shape
-        self.prior_weights = jr.normal(key, (OD,L,num_samples))
+        key_prior_weights, key_residual = jr.split(key)
+        self.prior_weights = jr.normal(key_prior_weights, (OD,L,num_samples))
         assert self.prior_weights.shape == (OD,L,num_samples)
         
         # compute the mean-reparameterized inducing weights v = \mu + (K + V)^{-1}(f - \eps)
@@ -96,7 +93,7 @@ class SparseGaussianProcess():
         assert lower==False
         prior = self.prior(self.inducing_locations)
         assert prior.shape==(S,M,OD)
-        residual = prior.T - (jnp.reshape(jnp.exp(self.inducing_pseudo_log_errvar / 2), (OD,M,1)) * jr.normal(key,(OD,M,num_samples))) # TODO: careful with f32!
+        residual = prior.T - (jnp.reshape(jnp.exp(self.inducing_pseudo_log_errvar / 2), (OD,M,1)) * jr.normal(key_residual, (OD,M,num_samples))) # TODO: careful with f32!
         assert residual.shape==(OD,M,num_samples)
         self.inducing_weights = jnp.reshape(self.inducing_pseudo_mean,(OD,M,1)) + jsp.linalg.cho_solve((self.cholesky,False),residual)
         assert self.inducing_weights.shape==(OD,M,num_samples)
@@ -113,18 +110,19 @@ class SparseGaussianProcess():
             num_basis: the number of basis functions to use.
             key: the random number generator key.
         """
+        key_frequency, key_phase, key_randomize = jr.split(key, 3)
         (OD,ID,L) = self.prior_frequency.shape
-        self.prior_frequency = standard_spectral_measure(self.kernel, OD, ID, num_basis, key)
+        self.prior_frequency = standard_spectral_measure(self.kernel, OD, ID, num_basis, key_frequency)
         assert self.prior_frequency.shape == (OD,ID,num_basis)
         (OD2,L2) = self.prior_phase.shape
         assert OD2==OD
         assert L2==L
-        self.prior_phase = jr.uniform(key, (OD, num_basis), maxval=2*jnp.pi)
+        self.prior_phase = jr.uniform(key_phase, (OD, num_basis), maxval=2*jnp.pi)
         assert self.prior_phase.shape == (OD,num_basis)
         (OD3,L3,S) = self.prior_weights.shape
         assert OD3==OD
         assert L3==L2
-        self.randomize(S,key)
+        self.randomize(S,key_randomize)
 
 
     def prior(
