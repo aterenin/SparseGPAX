@@ -40,17 +40,17 @@ class SparseGaussianProcess:
         
         key_inducing_loc, key_prior = jr.split(key)
 
-        (L,ID,OD,M,S) = (self.num_basis ,self.input_dimension, self.output_dimension, self.num_inducing, self.num_samples)
+        (S,OD,ID,M,L) = (self.num_samples, self.output_dimension, self.input_dimension, self.num_inducing, self.num_basis)
         self.prior_frequency = jnp.zeros((OD, ID, L))
         self.prior_phase = jnp.zeros((OD, L))
         self.prior_weights = jnp.zeros((S, OD, L))
-        self.inducing_locations = jr.normal(key, (M, ID))
+        self.inducing_locations = jr.normal(key_inducing_loc, (M, ID))
         self.inducing_pseudo_mean = jnp.zeros((OD, M))
         self.inducing_pseudo_log_errvar = jnp.ones((OD, M))
         self.inducing_weights = jnp.zeros((S, OD, M))
         self.cholesky = jnp.zeros((OD, M, M))
         
-        self.resample_prior_basis(key)
+        self.resample_prior_basis(key_prior)
 
 
     def __call__(
