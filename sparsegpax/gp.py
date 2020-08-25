@@ -9,7 +9,7 @@ tfp = tensorflow_probability.experimental.substrates.jax
 tfk = tfp.math.psd_kernels
 from sparsegpax.spectral import standard_spectral_measure, spectral_weights
 
-class SparseGaussianProcess(): 
+class SparseGaussianProcess: 
     """A sparse Gaussian process, implemented as a Haiku module.
 
     """
@@ -36,9 +36,10 @@ class SparseGaussianProcess():
         self.num_basis = 64
         self.num_samples = 8
         self.kernel = kernel
+        
+        key_inducing_loc, key_prior = jr.split(key)
 
         (L,ID,OD,M,S) = (self.num_basis ,self.input_dimension, self.output_dimension, self.num_inducing, self.num_samples)
-
         self.prior_frequency = jnp.zeros((OD, ID, L))
         self.prior_phase = jnp.zeros((OD, L))
         self.prior_weights = jnp.zeros((OD, L, S))
@@ -91,6 +92,8 @@ class SparseGaussianProcess():
         if num_samples is not None:
             self.num_samples = num_samples
 
+        key_prior_weights, key_residual = jr.split(key)
+
         (S,M,OD,ID,L) = (self.num_samples, self.num_inducing, self.output_dimension, self.input_dimension, self.num_basis)
         # inducing_locations = hk.get_parameter("inducing_locations", [M,ID], init=hk.initializers.RandomUniform())
         # inducing_pseudo_mean = hk.get_parameter("inducing_pseudo_mean", [OD,M], init=jnp.zeros)
@@ -99,12 +102,12 @@ class SparseGaussianProcess():
         inducing_pseudo_mean = self.inducing_pseudo_mean
         inducing_pseudo_log_errvar = self.inducing_pseudo_log_errvar
 
-        prior_weights = jr.normal(key, (OD,L,S))
+        prior_weights = jr.normal(key_prior_weights, (OD,L,S))
         # hk.set_state("prior_weights", prior_weights)
         self.prior_weights = prior_weights
 
         (cholesky,_) = jsp.linalg.cho_factor(self.kernel.matrix(inducing_locations, inducing_locations) + jax.vmap(jnp.diag)(jnp.exp(inducing_pseudo_log_errvar)))
-        residual = self.prior(inducing_locations).T - (jnp.reshape(jnp.exp(inducing_pseudo_log_errvar / 2), (OD,M,1)) * jr.normal(key,(OD,M,S))) # TODO: careful with f32!
+        residual = self.prior(inducing_locations).T - (jnp.reshape(jnp.exp(inducing_pseudo_log_errvar / 2), (OD,M,1)) * jr.normal(key_residual,(OD,M,S))) # TODO: careful with f32!
         inducing_weights = jnp.reshape(inducing_pseudo_mean,(OD,M,1)) + jsp.linalg.cho_solve((cholesky,False),residual) # mean-reparameterized v = \mu + (K + V)^{-1}(f - \eps)
 
         # hk.set_state("inducing_weights", inducing_weights)
@@ -137,16 +140,18 @@ class SparseGaussianProcess():
         if num_basis is not None:
             self.num_basis = num_basis
 
+        key_frequency, key_phase, key_randomize = jr.split(key, 3)
+
         (OD,ID,L) = (self.output_dimension, self.input_dimension, self.num_basis)
-        prior_frequency = standard_spectral_measure(self.kernel, OD, ID, L, key)
-        prior_phase = jr.uniform(key, (OD, L), maxval=2*jnp.pi)
+        prior_frequency = standard_spectral_measure(self.kernel, OD, ID, L, key_frequency)
+        prior_phase = jr.uniform(key_phase, (OD, L), maxval=2*jnp.pi)
 
         # hk.set_state("prior_frequency", prior_frequency)
         # hk.set_state("prior_phase", prior_phase)
         self.prior_frequency = prior_frequency
         self.prior_phase = prior_phase
 
-        self.randomize(key)
+        self.randomize(key_randomize)
 
         (OD,ID,L) = prior_frequency.shape
         assert prior_frequency.shape == (OD,ID,L)
