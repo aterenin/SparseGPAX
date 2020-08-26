@@ -18,30 +18,35 @@ class SparseGaussianProcess(hk.Module):
 
     def __init__(
             self,
+            kernel: tfk.PositiveSemidefiniteKernel,
             input_dimension: int,
             output_dimension: int,
             num_inducing: int,
-            kernel: tfk.PositiveSemidefiniteKernel,
+            num_basis: int,
+            num_samples: int,
             name: Optional[str] = None,
     ):
         """Initializes the sparse GP.
 
         Args:
-            name: module name.
+            kernel: the covariance kernel.
+            input_dimension: the input space dimension.
+            output_dimension: the output space dimension.
+            num_inducing: the number of inducing points per input dimension.
+            num_basis: the number of prior basis functions.
+            num_samples: the number of samples stored in the GP.
+            name: the module name.
         """
         super().__init__(name=name)
+        self.kernel = kernel
         self.input_dimension = input_dimension
         self.output_dimension = output_dimension
         self.num_inducing = num_inducing
-        self.kernel = kernel
+        self.num_basis = num_basis
+        self.num_samples = num_samples
 
-        (S,OD,ID,M,L) = (8, self.output_dimension, self.input_dimension, self.num_inducing, 64)
-        hk.set_state("prior_frequency", jnp.zeros((OD,ID,L)))
-        hk.set_state("prior_phase", jnp.zeros((OD,L)))
-        hk.set_state("prior_weights", jnp.zeros((S,OD,L)))
-        hk.set_state("inducing_weights", jnp.zeros((S,OD,M)))
-        
-        self.resample_prior_basis(num_basis=L,num_samples=S)
+        self.resample_prior_basis()
+        self.randomize()
 
 
     def __call__(
@@ -53,9 +58,9 @@ class SparseGaussianProcess(hk.Module):
         Args:
             x: the input matrix.
         """
-        (ID,M) = (self.input_dimension, self.num_inducing)
+        (S,OD,ID,M) = (self.num_samples, self.output_dimension, self.input_dimension, self.num_inducing)
         inducing_locations = hk.get_parameter("inducing_locations", [M,ID], init=hk.initializers.RandomUniform())
-        inducing_weights = hk.get_state("inducing_weights")
+        inducing_weights = hk.get_state("inducing_weights", [S,OD,M], init=jnp.zeros)
 
         f_prior = self.prior(x)
         f_data = tf2jax.linalg.matvec(self.kernel.matrix(x, inducing_locations), inducing_weights) # non-batched
@@ -70,17 +75,11 @@ class SparseGaussianProcess(hk.Module):
 
     def randomize(
             self,
-            num_samples: int = None,
     ):
         """Samples a new set of random functions from the GP.
 
-        Args:
-            num_samples: the number of samples to draw.
-            key: the random number generator key.
         """
-        (OD,ID,M) = (self.output_dimension, self.input_dimension, self.num_inducing)
-        L = hk.get_state("prior_weights").shape[-1]
-        S = num_samples if num_samples is not None else hk.get_state("prior_weights").shape[0]
+        (S,OD,ID,M,L) = (self.num_samples, self.output_dimension, self.input_dimension, self.num_inducing, self.num_basis)
         inducing_locations = hk.get_parameter("inducing_locations", [M,ID], init=hk.initializers.RandomUniform())
         inducing_pseudo_mean = hk.get_parameter("inducing_pseudo_mean", [OD,M], init=jnp.zeros)
         inducing_pseudo_log_errvar = hk.get_parameter("inducing_pseudo_log_errvar", [OD,M], init=jnp.zeros)
@@ -108,25 +107,16 @@ class SparseGaussianProcess(hk.Module):
 
     def resample_prior_basis(
             self,
-            num_basis: int = None,
-            num_samples: int = None
     ):
         """Resamples the frequency and phase of the prior random feature basis.
 
-        Args:
-            num_basis: the number of basis functions to use.
-            key: the random number generator key.
         """
-        (OD,ID) = (self.output_dimension, self.input_dimension)
-        L = num_basis if num_basis is not None else hk.get_state("prior_frequency").shape[-1]
-        
+        (OD,ID,L) = (self.output_dimension, self.input_dimension, self.num_basis)
         prior_frequency = standard_spectral_measure(self.kernel, OD, ID, L, hk.next_rng_key())
         prior_phase = jr.uniform(hk.next_rng_key(), (OD, L), maxval=2*jnp.pi)
 
         hk.set_state("prior_frequency", prior_frequency)
         hk.set_state("prior_phase", prior_phase)
-
-        self.randomize(num_samples)
 
         (OD,ID,L) = prior_frequency.shape
         assert prior_frequency.shape == (OD,ID,L)
@@ -145,11 +135,11 @@ class SparseGaussianProcess(hk.Module):
         Args:
             x: the input matrix.
         """
-        prior_frequency = hk.get_state("prior_frequency")
-        prior_phase = hk.get_state("prior_phase")
-        prior_weights = hk.get_state("prior_weights")
-        L = prior_frequency.shape[-1]
-
+        (S,OD,ID,L) = (self.num_samples, self.output_dimension, self.input_dimension, self.num_basis)
+        prior_frequency = hk.get_state("prior_frequency", [OD,ID,L], init=jnp.zeros)
+        prior_phase = hk.get_state("prior_phase", [OD,L], init=jnp.zeros)
+        prior_weights = hk.get_state("prior_weights", [S,OD,L], init=jnp.zeros)
+        
         (outer_weights, inner_weights) = spectral_weights(self.kernel, prior_frequency)
         rescaled_x = x / inner_weights
         basis_fn_inner_prod = rescaled_x @ prior_frequency
@@ -185,11 +175,11 @@ class SparseGaussianProcess(hk.Module):
         inducing_locations = hk.get_parameter("inducing_locations", [M,ID], init=hk.initializers.RandomUniform())
         inducing_pseudo_mean = hk.get_parameter("inducing_pseudo_mean", [OD,M], init=jnp.zeros)
         inducing_pseudo_log_errvar = hk.get_parameter("inducing_pseudo_log_errvar", [OD,M], init=jnp.zeros)
-        cholesky = hk.get_state("cholesky")
-
+        cholesky = hk.get_state("cholesky", [OD,M,M], init=jnp.zeros)
+        
         logdet_term = (2 * jnp.sum(jax.vmap(jnp.diag)(cholesky))) - jnp.sum(inducing_pseudo_log_errvar)
         kernel_matrix = self.kernel.matrix(inducing_locations, inducing_locations)
-        cholesky_inv = tf2jax.linalg.LinearOperatorLowerTriangular(cholesky).solve(jnp.eye(cholesky.shape[-1]))
+        cholesky_inv = tf2jax.linalg.LinearOperatorLowerTriangular(cholesky).solve(jnp.eye(M))
         trace_term = jnp.sum(cholesky_inv * kernel_matrix)
         reparameterized_quadratic_form_term = jnp.sum(inducing_pseudo_mean @ kernel_matrix @ inducing_pseudo_mean.T)
         return (logdet_term - (OD*ID*M) + trace_term + reparameterized_quadratic_form_term) / 2
