@@ -45,6 +45,7 @@ class SparseGaussianProcess(hk.Module):
         self.num_basis = num_basis
         self.num_samples = num_samples
 
+        hk.get_parameter("log_error_variance", [self.output_dimension], init=jnp.zeros) # ensure parameter gets initialized
         self.resample_prior_basis()
         self.randomize()
 
@@ -183,3 +184,20 @@ class SparseGaussianProcess(hk.Module):
         trace_term = jnp.sum(cholesky_inv * kernel_matrix)
         reparameterized_quadratic_form_term = jnp.sum(inducing_pseudo_mean @ kernel_matrix @ inducing_pseudo_mean.T)
         return (logdet_term - (OD*ID*M) + trace_term + reparameterized_quadratic_form_term) / 2
+
+    def errvar(
+            self,
+    ) -> jnp.ndarray:
+        """Returns the error variance vector of the GP.
+        
+        """
+        return jnp.exp(hk.get_parameter("log_error_variance", [self.output_dimension], init=jnp.zeros))
+
+    def hyperprior(
+            self,
+    ) -> jnp.ndarray:
+        """Returns the log hyperprior regularization term of the GP.
+        
+        """
+        return jnp.ones(()) # temporary
+

@@ -49,5 +49,5 @@ MANIFEST
 # Per-project virtualenvs
 .venv*/
 
-# iPython-specific debugging scripts
-*.ipy
+# debugging iPython scripts in root directory
+/*.ipy

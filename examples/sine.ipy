@@ -1,0 +1,51 @@
+%load_ext autoreload
+%autoreload 2
+import jax
+import jax.numpy as jnp
+import jax.random as jr
+import jax.scipy as jsp
+import tensorflow_probability
+tfp = tensorflow_probability.experimental.substrates.jax
+tfk = tfp.math.psd_kernels
+import haiku as hk
+from jax.experimental import optix
+import sparsegpax
+
+k = tfk.ExponentiatedQuadratic()
+rng = hk.PRNGSequence(1)
+
+model = hk.transform_with_state(lambda x: sparsegpax.SparseGaussianProcess(k, 1, 1, 16, 64, 8)(x))
+randomize = hk.transform_with_state(lambda: sparsegpax.SparseGaussianProcess(k, 1, 1, 16, 64, 8).randomize())
+resample_basis = hk.transform_with_state(lambda: sparsegpax.SparseGaussianProcess(k, 1, 1, 16, 64, 8).resample_basis())
+prior_kl = hk.transform_with_state(lambda: sparsegpax.SparseGaussianProcess(k, 1, 1, 16, 64, 8).prior_KL())
+errvar = hk.transform_with_state(lambda: sparsegpax.SparseGaussianProcess(k, 1, 1, 16, 64, 8).errvar())
+hyperprior = hk.transform_with_state(lambda: sparsegpax.SparseGaussianProcess(k, 1, 1, 16, 64, 8).hyperprior())
+
+x = jnp.expand_dims(jnp.arange(-4.5,4.5,0.1), -1)
+y = 2 * jnp.sin(x) + jr.normal(next(rng), x.shape)
+
+(params,state) = model.init(next(rng), x)
+(_,state) = randomize.apply(params,state,next(rng))
+
+def loss(params,state,rng,x,y,n_data):
+    (_,state) = randomize.apply(params,state,next(rng))
+    #
+    (kl,_) = prior_kl.apply(params,state,next(rng))
+    #
+    (f,_) = model.apply(params,state,next(rng),x)
+    (ssq,_) = errvar.apply(params,state,next(rng))
+    (n_samples,_,n_batch) = f.shape
+    c = n_data / (n_batch * n_samples * 2)
+    l = n_data*ssq + c*jnp.sum(((y - f) / ssq)**2)
+    #
+    (r,_) = hyperprior.apply(params,state,next(rng))
+    #
+    return kl + l + r
+    
+opt = optix.adam(0.001)
+opt_state = opt.init(params)
+
+for i in range(10):
+    grads = jax.grad(loss)(params,state,rng,x,y,x.shape[0])
+    (updates,opt_state) = opt.update(grads, opt_state)
+    params = optix.apply_updates(params,updates)
