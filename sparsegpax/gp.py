@@ -49,7 +49,7 @@ class SparseGaussianProcess(hk.Module):
         hk.get_parameter("log_error_stddev", [OD], init=jnp.zeros)
         hk.get_parameter("inducing_locations", [M,ID], init=hk.initializers.RandomUniform())
         hk.get_parameter("inducing_pseudo_mean", [OD,M], init=jnp.zeros)
-        hk.get_parameter("inducing_pseudo_log_errvar", [OD,M], init=jnp.zeros)
+        hk.get_parameter("inducing_pseudo_log_err_stddev", [OD,M], init=jnp.zeros)
         hk.get_state("prior_frequency", [OD,ID,L], init=jnp.zeros)
         hk.get_state("prior_phase", [OD,L], init=jnp.zeros)
         hk.get_state("prior_weights", [S,OD,L], init=jnp.zeros)
@@ -90,13 +90,13 @@ class SparseGaussianProcess(hk.Module):
         (S,OD,ID,M,L) = (self.num_samples, self.output_dimension, self.input_dimension, self.num_inducing, self.num_basis)
         inducing_locations = hk.get_parameter("inducing_locations", [M,ID], init=hk.initializers.RandomUniform())
         inducing_pseudo_mean = hk.get_parameter("inducing_pseudo_mean", [OD,M], init=jnp.zeros)
-        inducing_pseudo_log_errvar = hk.get_parameter("inducing_pseudo_log_errvar", [OD,M], init=jnp.zeros)
+        inducing_pseudo_log_err_stddev = hk.get_parameter("inducing_pseudo_log_err_stddev", [OD,M], init=jnp.zeros)
         
         prior_weights = jr.normal(hk.next_rng_key(), (S,OD,L))
         hk.set_state("prior_weights", prior_weights)
 
-        (cholesky,_) = jsp.linalg.cho_factor(self.kernel.matrix(inducing_locations, inducing_locations) + jax.vmap(jnp.diag)(jnp.exp(inducing_pseudo_log_errvar)), lower=True)
-        residual = self.prior(inducing_locations) + jnp.exp(inducing_pseudo_log_errvar / 2) * jr.normal(hk.next_rng_key(),(S,OD,M)) # TODO: careful with f32!
+        (cholesky,_) = jsp.linalg.cho_factor(self.kernel.matrix(inducing_locations, inducing_locations) + jax.vmap(jnp.diag)(jnp.exp(inducing_pseudo_log_err_stddev * 2)), lower=True)
+        residual = self.prior(inducing_locations) + jnp.exp(inducing_pseudo_log_err_stddev) * jr.normal(hk.next_rng_key(),(S,OD,M)) # TODO: careful with f32!
         inducing_weights = inducing_pseudo_mean - tf2jax.linalg.LinearOperatorLowerTriangular(cholesky).solvevec(tf2jax.linalg.LinearOperatorLowerTriangular(cholesky).solvevec(residual), adjoint=True) # mean-reparameterized v = \mu + (K + V)^{-1}(-f - \eps)  
         
         hk.set_state("inducing_weights", inducing_weights)
@@ -182,14 +182,14 @@ class SparseGaussianProcess(hk.Module):
         (OD,ID,M) = (self.output_dimension, self.input_dimension, self.num_inducing)
         inducing_locations = hk.get_parameter("inducing_locations", [M,ID], init=hk.initializers.RandomUniform())
         inducing_pseudo_mean = hk.get_parameter("inducing_pseudo_mean", [OD,M], init=jnp.zeros)
-        inducing_pseudo_log_errvar = hk.get_parameter("inducing_pseudo_log_errvar", [OD,M], init=jnp.zeros)
+        inducing_pseudo_log_err_stddev = hk.get_parameter("inducing_pseudo_log_err_stddev", [OD,M], init=jnp.zeros)
         cholesky = hk.get_state("cholesky", [OD,M,M], init=jnp.zeros)
         
-        logdet_term = 2*jnp.sum(jnp.log(jax.vmap(jnp.diag)(cholesky))) - jnp.sum(inducing_pseudo_log_errvar)
+        logdet_term = 2*jnp.sum(jnp.log(jax.vmap(jnp.diag)(cholesky))) - 2*jnp.sum(inducing_pseudo_log_err_stddev)
         kernel_matrix = self.kernel.matrix(inducing_locations, inducing_locations)
         cholesky_inv = tf2jax.linalg.LinearOperatorLowerTriangular(cholesky).solve(tf2jax.linalg.LinearOperatorLowerTriangular(cholesky).solve(jnp.eye(M)),adjoint=True)
         trace_term = jnp.sum(cholesky_inv * kernel_matrix)
-        reparameterized_quadratic_form_term = jnp.sum(inducing_pseudo_mean @ kernel_matrix @ inducing_pseudo_mean.T)
+        reparameterized_quadratic_form_term = jnp.sum(inducing_pseudo_mean * tf2jax.linalg.matvec(kernel_matrix, inducing_pseudo_mean))
         return (logdet_term - (OD*ID*M) + trace_term + reparameterized_quadratic_form_term) / 2
 
     def err_stddev(
