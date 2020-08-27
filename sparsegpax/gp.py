@@ -90,7 +90,7 @@ class SparseGaussianProcess(hk.Module):
 
         (cholesky,_) = jsp.linalg.cho_factor(self.kernel.matrix(inducing_locations, inducing_locations) + jax.vmap(jnp.diag)(jnp.exp(inducing_pseudo_log_errvar)), lower=True)
         residual = self.prior(inducing_locations) + jnp.exp(inducing_pseudo_log_errvar / 2) * jr.normal(hk.next_rng_key(),(S,OD,M)) # TODO: careful with f32!
-        inducing_weights = inducing_pseudo_mean - tf2jax.linalg.LinearOperatorLowerTriangular(cholesky).solvevec(residual) # mean-reparameterized v = \mu + (K + V)^{-1}(-f - \eps)  
+        inducing_weights = inducing_pseudo_mean - tf2jax.linalg.LinearOperatorLowerTriangular(cholesky).solvevec(tf2jax.linalg.LinearOperatorLowerTriangular(cholesky).solvevec(residual), adjoint=True) # mean-reparameterized v = \mu + (K + V)^{-1}(-f - \eps)  
 
         hk.set_state("inducing_weights", inducing_weights)
         hk.set_state("cholesky", cholesky)
@@ -180,7 +180,7 @@ class SparseGaussianProcess(hk.Module):
         
         logdet_term = (2 * jnp.sum(jax.vmap(jnp.diag)(cholesky))) - jnp.sum(inducing_pseudo_log_errvar)
         kernel_matrix = self.kernel.matrix(inducing_locations, inducing_locations)
-        cholesky_inv = tf2jax.linalg.LinearOperatorLowerTriangular(cholesky).solve(jnp.eye(M))
+        cholesky_inv = tf2jax.linalg.LinearOperatorLowerTriangular(cholesky).solve(tf2jax.linalg.LinearOperatorLowerTriangular(cholesky).solve(jnp.eye(M)),adjoint=True)
         trace_term = jnp.sum(cholesky_inv * kernel_matrix)
         reparameterized_quadratic_form_term = jnp.sum(inducing_pseudo_mean @ kernel_matrix @ inducing_pseudo_mean.T)
         return (logdet_term - (OD*ID*M) + trace_term + reparameterized_quadratic_form_term) / 2
