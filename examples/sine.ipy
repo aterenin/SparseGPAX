@@ -15,10 +15,11 @@ k = tfk.ExponentiatedQuadratic()
 rng = hk.PRNGSequence(1)
 
 model = hk.transform_with_state(lambda x: sparsegpax.SparseGaussianProcess(k, 1, 1, 11, 67, 17)(x))
+prior = hk.transform_with_state(lambda x: sparsegpax.SparseGaussianProcess(k, 1, 1, 11, 67, 17).prior(x))
 randomize = hk.transform_with_state(lambda: sparsegpax.SparseGaussianProcess(k, 1, 1, 11, 67, 17).randomize())
-resample_basis = hk.transform_with_state(lambda: sparsegpax.SparseGaussianProcess(k, 1, 1, 11, 67, 17).resample_basis())
+resample_prior_basis = hk.transform_with_state(lambda: sparsegpax.SparseGaussianProcess(k, 1, 1, 11, 67, 17).resample_prior_basis())
 prior_kl = hk.transform_with_state(lambda: sparsegpax.SparseGaussianProcess(k, 1, 1, 11, 67, 17).prior_KL())
-errvar = hk.transform_with_state(lambda: sparsegpax.SparseGaussianProcess(k, 1, 1, 11, 67, 17).errvar())
+err_stddev = hk.transform_with_state(lambda: sparsegpax.SparseGaussianProcess(k, 1, 1, 11, 67, 17).err_stddev())
 hyperprior = hk.transform_with_state(lambda: sparsegpax.SparseGaussianProcess(k, 1, 1, 11, 67, 17).hyperprior())
 
 @jax.jit
@@ -30,19 +31,17 @@ def loss(params,state,key,x,y,n_data):
     (kl,_) = prior_kl.apply(params,state,jr.PRNGKey(0))
     #
     (f,_) = model.apply(params,state,key_f,x)
-    (ssq,_) = errvar.apply(params,state,jr.PRNGKey(0))
+    (s,_) = err_stddev.apply(params,state,jr.PRNGKey(0))
     (n_samples,_,n_batch) = f.shape
     c = n_data / (n_batch * n_samples * 2)
-    l = n_data*jnp.sum(ssq) + c*jnp.sum(((y - f) / ssq)**2)
+    l = n_data*jnp.sum(jnp.log(s)) + c*jnp.sum(((y - f) / s)**2)
     #
     (r,_) = hyperprior.apply(params,state,jr.PRNGKey(0))
     #
     return kl + l + r
-    
-def plot(gp,x,y)
 
-x = jnp.expand_dims(jnp.arange(-5,5,0.1), -1)
-y = 2 * jnp.sin(x).T + jr.normal(next(rng), x.T.shape)
+x = jnp.expand_dims(jnp.arange(-5,5.0000005,0.1), -1)
+y = 2 * jnp.sin(x).T + jr.normal(next(rng), x.T.shape)/10
 
 (params,state) = model.init(next(rng), x)
 params = hk.data_structures.merge(params,{
@@ -50,10 +49,10 @@ params = hk.data_structures.merge(params,{
         'inducing_locations': jnp.expand_dims(jnp.arange(-5,5.0000005,1), -1)
         }
     })
+(_,state) = resample_prior_basis.apply(params,state,next(rng))
 (_,state) = randomize.apply(params,state,next(rng))
 
 
-    
 opt = optix.adam(0.01)
 opt_state = opt.init(params)
 

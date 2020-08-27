@@ -45,9 +45,16 @@ class SparseGaussianProcess(hk.Module):
         self.num_basis = num_basis
         self.num_samples = num_samples
 
-        hk.get_parameter("log_error_variance", [self.output_dimension], init=jnp.zeros) # ensure parameter gets initialized
-        self.resample_prior_basis()
-        self.randomize()
+        (S,OD,ID,M,L) = (self.num_samples, self.output_dimension, self.input_dimension, self.num_inducing, self.num_basis)
+        hk.get_parameter("log_error_stddev", [OD], init=jnp.zeros)
+        hk.get_parameter("inducing_locations", [M,ID], init=hk.initializers.RandomUniform())
+        hk.get_parameter("inducing_pseudo_mean", [OD,M], init=jnp.zeros)
+        hk.get_parameter("inducing_pseudo_log_errvar", [OD,M], init=jnp.zeros)
+        hk.get_state("prior_frequency", [OD,ID,L], init=jnp.zeros)
+        hk.get_state("prior_phase", [OD,L], init=jnp.zeros)
+        hk.get_state("prior_weights", [S,OD,L], init=jnp.zeros)
+        hk.get_state("inducing_weights", [S,OD,M], init=jnp.zeros)
+        hk.get_state("cholesky", [OD,M,M], init=jnp.zeros)
 
 
     def __call__(
@@ -91,7 +98,7 @@ class SparseGaussianProcess(hk.Module):
         (cholesky,_) = jsp.linalg.cho_factor(self.kernel.matrix(inducing_locations, inducing_locations) + jax.vmap(jnp.diag)(jnp.exp(inducing_pseudo_log_errvar)), lower=True)
         residual = self.prior(inducing_locations) + jnp.exp(inducing_pseudo_log_errvar / 2) * jr.normal(hk.next_rng_key(),(S,OD,M)) # TODO: careful with f32!
         inducing_weights = inducing_pseudo_mean - tf2jax.linalg.LinearOperatorLowerTriangular(cholesky).solvevec(tf2jax.linalg.LinearOperatorLowerTriangular(cholesky).solvevec(residual), adjoint=True) # mean-reparameterized v = \mu + (K + V)^{-1}(-f - \eps)  
-
+        
         hk.set_state("inducing_weights", inducing_weights)
         hk.set_state("cholesky", cholesky)
         
@@ -145,8 +152,8 @@ class SparseGaussianProcess(hk.Module):
         rescaled_x = x / inner_weights
         basis_fn_inner_prod = rescaled_x @ prior_frequency
         basis_fn = jnp.cos(basis_fn_inner_prod + jnp.expand_dims(prior_phase,-2))
-        basis_weight = jnp.sqrt(2/L) * outer_weights * prior_weights
-        output = tf2jax.linalg.matvec(basis_fn, basis_weight)
+        basis_weights = jnp.sqrt(2/L) * outer_weights * prior_weights
+        output = tf2jax.linalg.matvec(basis_fn, basis_weights)
 
         (OD,ID,L) = prior_frequency.shape
         (OD2,L2) = prior_phase.shape
@@ -157,7 +164,7 @@ class SparseGaussianProcess(hk.Module):
         assert L==L2==L3==L4
         assert ID==ID2==ID3
         assert OD==OD2==OD3==OD4
-        assert basis_weight.shape == (S,OD,L)
+        assert basis_weights.shape == (S,OD,L)
         assert basis_fn.shape == (OD,N,L)
         assert basis_fn_inner_prod.shape == (OD,N,L)
         assert rescaled_x.shape == (N,ID)
@@ -185,13 +192,13 @@ class SparseGaussianProcess(hk.Module):
         reparameterized_quadratic_form_term = jnp.sum(inducing_pseudo_mean @ kernel_matrix @ inducing_pseudo_mean.T)
         return (logdet_term - (OD*ID*M) + trace_term + reparameterized_quadratic_form_term) / 2
 
-    def errvar(
+    def err_stddev(
             self,
     ) -> jnp.ndarray:
         """Returns the error variance vector of the GP.
         
         """
-        return jnp.exp(hk.get_parameter("log_error_variance", [self.output_dimension], init=jnp.zeros))
+        return jnp.exp(hk.get_parameter("log_error_stddev", [self.output_dimension], init=jnp.zeros))
 
     def hyperprior(
             self,
@@ -199,4 +206,4 @@ class SparseGaussianProcess(hk.Module):
         """Returns the log hyperprior regularization term of the GP.
         
         """
-        return jnp.ones(()) # temporary
+        return jnp.zeros(()) # temporary
