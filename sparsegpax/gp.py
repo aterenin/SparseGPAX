@@ -89,8 +89,8 @@ class SparseGaussianProcess(hk.Module):
         hk.set_state("prior_weights", prior_weights)
 
         (cholesky,_) = jsp.linalg.cho_factor(self.kernel.matrix(inducing_locations, inducing_locations) + jax.vmap(jnp.diag)(jnp.exp(inducing_pseudo_log_errvar)), lower=True)
-        residual = self.prior(inducing_locations) - jnp.exp(inducing_pseudo_log_errvar / 2) * jr.normal(hk.next_rng_key(),(S,OD,M)) # TODO: careful with f32!
-        inducing_weights = inducing_pseudo_mean + tf2jax.linalg.LinearOperatorLowerTriangular(cholesky).solvevec(residual) # mean-reparameterized v = \mu + (K + V)^{-1}(f - \eps)
+        residual = self.prior(inducing_locations) + jnp.exp(inducing_pseudo_log_errvar / 2) * jr.normal(hk.next_rng_key(),(S,OD,M)) # TODO: careful with f32!
+        inducing_weights = inducing_pseudo_mean - tf2jax.linalg.LinearOperatorLowerTriangular(cholesky).solvevec(residual) # mean-reparameterized v = \mu + (K + V)^{-1}(-f - \eps)  
 
         hk.set_state("inducing_weights", inducing_weights)
         hk.set_state("cholesky", cholesky)
@@ -200,4 +200,3 @@ class SparseGaussianProcess(hk.Module):
         
         """
         return jnp.ones(()) # temporary
-
