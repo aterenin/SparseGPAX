@@ -178,7 +178,7 @@ class SparseGaussianProcess(hk.Module):
         inducing_pseudo_log_errvar = hk.get_parameter("inducing_pseudo_log_errvar", [OD,M], init=jnp.zeros)
         cholesky = hk.get_state("cholesky", [OD,M,M], init=jnp.zeros)
         
-        logdet_term = (2 * jnp.sum(jax.vmap(jnp.diag)(cholesky))) - jnp.sum(inducing_pseudo_log_errvar)
+        logdet_term = 2*jnp.sum(jnp.log(jax.vmap(jnp.diag)(cholesky))) - jnp.sum(inducing_pseudo_log_errvar)
         kernel_matrix = self.kernel.matrix(inducing_locations, inducing_locations)
         cholesky_inv = tf2jax.linalg.LinearOperatorLowerTriangular(cholesky).solve(tf2jax.linalg.LinearOperatorLowerTriangular(cholesky).solve(jnp.eye(M)),adjoint=True)
         trace_term = jnp.sum(cholesky_inv * kernel_matrix)
