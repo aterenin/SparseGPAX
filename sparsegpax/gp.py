@@ -8,7 +8,6 @@ import tensorflow_probability
 from tensorflow_probability.python.internal.backend import jax as tf2jax
 tfp = tensorflow_probability.experimental.substrates.jax
 tfk = tfp.math.psd_kernels
-from sparsegpax.spectral import standard_spectral_measure, spectral_weights
 
 class SparseGaussianProcessState(NamedTuple): 
     """Due to Haiku limitation we need to manually manage state.
@@ -28,7 +27,7 @@ class SparseGaussianProcess(hk.Module):
 
     def __init__(
             self,
-            kernel: tfk.PositiveSemidefiniteKernel,
+            kernel: hk.Module,
             input_dimension: int,
             output_dimension: int,
             num_inducing: int,
@@ -45,7 +44,7 @@ class SparseGaussianProcess(hk.Module):
             num_inducing: the number of inducing points per input dimension.
             num_basis: the number of prior basis functions.
             num_samples: the number of samples stored in the GP.
-            name: the module name.
+            name: the Haiku module name.
         """
         super().__init__(name=name)
         self.kernel = kernel
@@ -97,11 +96,6 @@ class SparseGaussianProcess(hk.Module):
         f_prior = self.prior(x,state)
         f_data = tf2jax.linalg.matvec(self.kernel.matrix(x, inducing_locations), inducing_weights) # non-batched
 
-        (N,ID) = x.shape
-        (S,OD,M) = inducing_weights.shape
-        assert f_prior.shape == (S,OD,N)
-        assert f_data.shape == (S,OD,N)
-
         return f_prior + f_data
 
 
@@ -124,17 +118,7 @@ class SparseGaussianProcess(hk.Module):
         
         (cholesky,_) = jsp.linalg.cho_factor(self.kernel.matrix(inducing_locations, inducing_locations) + jax.vmap(jnp.diag)(jnp.exp(inducing_pseudo_log_err_stddev * 2)), lower=True)
         residual = self.prior(inducing_locations,state) + jnp.exp(inducing_pseudo_log_err_stddev) * jr.normal(hk.next_rng_key(),(S,OD,M))
-        inducing_weights = inducing_pseudo_mean - tf2jax.linalg.LinearOperatorLowerTriangular(cholesky).solvevec(tf2jax.linalg.LinearOperatorLowerTriangular(cholesky).solvevec(residual), adjoint=True) # mean-reparameterized v = \mu + (K + V)^{-1}(-f - \eps)  
-        
-        assert prior_weights.shape == (S,OD,L)
-        (M,ID) = inducing_locations.shape
-        (S,OD2,M2) = inducing_weights.shape
-        assert M==M2
-        assert OD==OD2
-        assert cholesky.shape==(OD,M,M)
-        assert self.prior(inducing_locations,state).shape==(S,OD,M)
-        assert residual.shape==(S,OD,M)
-        assert inducing_weights.shape==(S,OD,M)
+        inducing_weights = inducing_pseudo_mean - tf2jax.linalg.LinearOperatorLowerTriangular(cholesky).solvevec(tf2jax.linalg.LinearOperatorLowerTriangular(cholesky).solvevec(residual), adjoint=True) # mean-reparameterized v = \mu + (K + V)^{-1}(-f - \eps)
 
         return SparseGaussianProcessState(
             state.prior_frequency,
@@ -153,15 +137,8 @@ class SparseGaussianProcess(hk.Module):
 
         """
         (OD,ID,L) = (self.output_dimension, self.input_dimension, self.num_basis)
-        prior_frequency = standard_spectral_measure(self.kernel, OD, ID, L, hk.next_rng_key())
+        prior_frequency = self.kernel.standard_spectral_measure(L)
         prior_phase = jr.uniform(hk.next_rng_key(), (OD, L), maxval=2*jnp.pi)
-
-        (OD,ID,L) = prior_frequency.shape
-        assert prior_frequency.shape == (OD,ID,L)
-        (OD2,L2) = prior_phase.shape
-        assert OD2==OD
-        assert L2==L
-        assert prior_phase.shape == (OD,L)
 
         return SparseGaussianProcessState(
             prior_frequency,
@@ -187,27 +164,12 @@ class SparseGaussianProcess(hk.Module):
         prior_phase = state.prior_phase
         prior_weights = state.prior_weights
         
-        (outer_weights, inner_weights) = spectral_weights(self.kernel, prior_frequency)
+        (outer_weights, inner_weights) = self.kernel.spectral_weights(prior_frequency)
         rescaled_x = x / inner_weights
         basis_fn_inner_prod = rescaled_x @ prior_frequency
         basis_fn = jnp.cos(basis_fn_inner_prod + jnp.expand_dims(prior_phase,-2))
         basis_weights = jnp.sqrt(2/L) * outer_weights * prior_weights
         output = tf2jax.linalg.matvec(basis_fn, basis_weights)
-
-        (OD,ID,L) = prior_frequency.shape
-        (OD2,L2) = prior_phase.shape
-        (N,ID2) = x.shape
-        (S,OD3,L3) = prior_weights.shape
-        (OD4,L4) = outer_weights.shape
-        (ID3,) = inner_weights.shape
-        assert L==L2==L3==L4
-        assert ID==ID2==ID3
-        assert OD==OD2==OD3==OD4
-        assert basis_weights.shape == (S,OD,L)
-        assert basis_fn.shape == (OD,N,L)
-        assert basis_fn_inner_prod.shape == (OD,N,L)
-        assert rescaled_x.shape == (N,ID)
-        assert output.shape == (S,OD,N)
 
         return output
 
