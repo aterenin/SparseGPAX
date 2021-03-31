@@ -14,7 +14,7 @@
 │⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠱⠀│\
 └───────────────────┘
 
-An *ultra-lightweight* JAX/Haiku implementation of sparse Gaussian processes.
+An *ultra-lightweight* JAX implementation of sparse Gaussian processes.
 
 It supports models of the form
 ```
